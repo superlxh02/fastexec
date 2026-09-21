@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 900" role="img" aria-labelledby="t1 d1">
+  <title id="t1">fastexec 分层架构与跨层协作</title>
+  <desc id="d1">左侧自上而下为 exec.hpp 公开接口层、pool.hpp 与 worker.hpp 调度层、shared.hpp 共享状态层、queue.hpp 队列层，箭头表示调用与持有关系；右侧为 future.hpp 结果通道、taskgroup.hpp 任务组跟踪、util.hpp 工具，与调度层之间有双向协作；底部列出任务、结果、跟踪三条主路径。</desc>
+  <defs>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4263a2"/>
+    </marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b15f29"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2f7d5c"/>
+    </marker>
+    <style>
+      text { font-family: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #17233b; }
+      .title { font-size: 26px; font-weight: 700; }
+      .lname { font-size: 18px; font-weight: 700; }
+      .small { font-size: 14px; }
+      .label { font-size: 13px; fill: #385180; }
+      .band { font-size: 16px; font-weight: 700; }
+      .box { stroke-width: 2; rx: 12; }
+      .flow { fill: none; stroke: #4263a2; stroke-width: 2.4; }
+      .dash { fill: none; stroke: #b15f29; stroke-width: 2.2; stroke-dasharray: 7 6; }
+      .track { fill: none; stroke: #2f7d5c; stroke-width: 2.2; }
+    </style>
+  </defs>
+
+  <rect width="1240" height="900" fill="#f8faff"/>
+  <text x="44" y="46" class="title">fastexec 分层架构与跨层协作</text>
+
+  <!-- 左列：四层依赖 -->
+  <rect x="44" y="84" width="596" height="96" class="box" fill="#e5edff" stroke="#7794d2"/>
+  <text x="68" y="118" class="lname">公开接口层 · exec.hpp</text>
+  <text x="68" y="146" class="small">spawn / spawn_with_options / wait / block_on / close_and_join</text>
+
+  <rect x="44" y="220" width="596" height="150" class="box" fill="#e4f4ed" stroke="#67a786"/>
+  <text x="68" y="254" class="lname">调度层 · detail/pool.hpp + detail/worker.hpp</text>
+  <text x="68" y="282" class="small">thread_pool（单例）：submit_with_options、worker 生命周期管理</text>
+  <text x="68" y="308" class="small">Worker：run / run_one / get_next_task / task_steal / help_until</text>
+  <text x="68" y="334" class="small">线程局部上下文：t_worker、t_current_task_group</text>
+  <text x="68" y="360" class="small">启动同步：std::latch sync_start（注册完成后才进入循环）</text>
+
+  <rect x="44" y="410" width="596" height="130" class="box" fill="#eaf4ff" stroke="#70a0c6"/>
+  <text x="68" y="444" class="lname">共享状态层 · detail/shared.hpp</text>
+  <text x="68" y="472" class="small">worker 指针表 · GlobalQueue 实例 · pending 在途任务计数</text>
+  <text x="68" y="498" class="small">work_epoch 工作版本号 · 窃取限流计数 · 停止汇合 latch</text>
+  <text x="68" y="524" class="small">对外只暴露给 Worker 与 thread_pool</text>
+
+  <rect x="44" y="580" width="596" height="150" class="box" fill="#fff1dc" stroke="#d4a260"/>
+  <text x="68" y="614" class="lname">队列层 · detail/queue.hpp</text>
+  <text x="68" y="642" class="small">Task { std::function&lt;void()&gt; run; bool stealable; }</text>
+  <text x="68" y="668" class="small">GlobalQueue：std::mutex + std::deque&lt;Task&gt;，支持批量搬运</text>
+  <text x="68" y="694" class="small">LocalQueue&lt;256&gt;：定长环形数组 + 打包 64 位头指针</text>
+  <text x="68" y="720" class="small">调用入口：Worker::get_next_task / push_back_task_to_local</text>
+
+  <path d="M 342 180 L 342 214" class="flow" marker-end="url(#ab)"/>
+  <text x="354" y="204" class="label">调用</text>
+  <path d="M 342 370 L 342 404" class="flow" marker-end="url(#ab)"/>
+  <text x="354" y="394" class="label">持有并访问</text>
+  <path d="M 342 540 L 342 574" class="flow" marker-end="url(#ab)"/>
+  <text x="354" y="564" class="label">构成</text>
+
+  <!-- 右列：跨层模块 -->
+  <rect x="696" y="84" width="500" height="190" class="box" fill="#fae9f4" stroke="#bd8cae"/>
+  <text x="720" y="118" class="lname">结果通道 · future.hpp</text>
+  <text x="720" y="146" class="small">future_state&lt;T&gt;：ready / value / error / broken</text>
+  <text x="720" y="172" class="small">promise&lt;T&gt;：写入结果后以 release 发布 ready</text>
+  <text x="720" y="198" class="small">packaged_task：64 字节原位存储 + 函数指针类型擦除</text>
+  <text x="720" y="224" class="small">完成钩子：结果发布后唤醒正在等待的 worker</text>
+  <text x="720" y="250" class="small">future&lt;T&gt;：wait / get；只可移动、只可读取一次</text>
+
+  <rect x="696" y="314" width="500" height="150" class="box" fill="#f2f0ff" stroke="#8e8ac9"/>
+  <text x="720" y="348" class="lname">任务组跟踪 · detail/taskgroup.hpp</text>
+  <text x="720" y="376" class="small">running_count：组内在途任务数量</text>
+  <text x="720" y="402" class="small">record_exception：保存首个组内任务异常</text>
+  <text x="720" y="428" class="small">decrement 归零 → notify_one + _on_zero()</text>
+  <text x="720" y="454" class="small">生命周期由 shared_ptr 维持，TLS 中只存裸指针</text>
+
+  <rect x="696" y="504" width="500" height="110" class="box" fill="#eef1f5" stroke="#98a4b5"/>
+  <text x="720" y="538" class="lname">工具 · detail/util.hpp</text>
+  <text x="720" y="566" class="small">noncopyable：禁止共享对象被复制</text>
+  <text x="720" y="592" class="small">Singleton&lt;T&gt;：函数内静态实例，进程内唯一</text>
+
+  <path d="M 640 246 L 690 246" class="flow" marker-end="url(#ab)"/>
+  <text x="652" y="238" class="label">提交</text>
+  <path d="M 692 206 L 646 206" class="dash" marker-end="url(#ao)"/>
+  <text x="652" y="198" class="label">唤醒</text>
+  <path d="M 640 352 L 690 352" class="track" marker-end="url(#ag)"/>
+  <text x="652" y="344" class="label">归属</text>
+  <path d="M 692 326 L 646 326" class="dash" marker-end="url(#ao)"/>
+  <text x="652" y="318" class="label">归零</text>
+
+  <!-- 底部：三条路径 -->
+  <rect x="44" y="740" width="1152" height="140" class="box" fill="#ffffff" stroke="#b9c6dd"/>
+  <text x="68" y="776" class="band">三条主路径</text>
+  <rect x="68" y="795" width="12" height="12" fill="#4263a2"/>
+  <text x="90" y="806" class="small">任务路径：spawn → submit_with_options 包装 → 全局队列 / Worker 本地队列 → Worker 取出执行</text>
+  <rect x="68" y="821" width="12" height="12" fill="#b15f29"/>
+  <text x="90" y="832" class="small">结果路径：packaged_task 执行 → promise 发布 ready → future::get() 取结果或重抛异常</text>
+  <rect x="68" y="847" width="12" height="12" fill="#2f7d5c"/>
+  <text x="90" y="858" class="small">跟踪路径：block_on 建组 → TLS 继承 → running_count 归零 → 唤醒等待方并检查异常</text>
+</svg>

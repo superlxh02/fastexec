@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 830" role="img" aria-labelledby="t3 d3">
+  <title id="t3">队列层窃取：两端相对与三阶段搬运</title>
+  <desc id="d3">上半部分对比 victim 队列与窃取者队列，标出 victim 的 worker 从尾端弹出、窃取者从头端搬走；中部用三个面板展示预留、搬运、归还三阶段中头指针与槽位状态的变化；底部展示窃取者取出最后一个任务立即执行、其余留在自己队列的收尾动作。</desc>
+  <defs>
+    <marker id="sf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4263a2"/>
+    </marker>
+    <marker id="so" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b15f29"/>
+    </marker>
+    <marker id="sg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2f7d5c"/>
+    </marker>
+    <style>
+      text { font-family: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #17233b; }
+      .title { font-size: 26px; font-weight: 700; }
+      .head { font-size: 17px; font-weight: 700; }
+      .small { font-size: 14px; }
+      .tiny { font-size: 12px; fill: #4b5c78; }
+      .mk { font-size: 12px; }
+      .cell { font-size: 13px; }
+      .code { font-family: "DejaVu Sans Mono", monospace; font-size: 12.5px; }
+      .box { stroke-width: 2; rx: 12; }
+      .flow { fill: none; stroke: #4263a2; stroke-width: 2.2; }
+      .orange { fill: none; stroke: #b15f29; stroke-width: 2.2; }
+      .green { fill: none; stroke: #2f7d5c; stroke-width: 2.2; }
+    </style>
+  </defs>
+
+  <rect width="1240" height="830" fill="#f8faff"/>
+  <text x="44" y="46" class="title">队列层窃取：两端相对与三阶段搬运</text>
+
+  <!-- ============ 上半：victim 与窃取者 ============ -->
+  <rect x="44" y="76" width="576" height="200" class="box" fill="#ffffff" stroke="#c3cede"/>
+  <text x="64" y="106" class="head">victim 的 LocalQueue（被窃取方）</text>
+  <text x="64" y="128" class="tiny">所属 worker 在尾端取走最新任务；下方序号 2 起共有 8 个任务。</text>
+  <g>
+    <rect x="64" y="164" width="40" height="52" fill="#e7efff" stroke="#829dcb"/><text x="84" y="195" class="cell" text-anchor="middle">2</text>
+    <rect x="108" y="164" width="40" height="52" fill="#e7efff" stroke="#829dcb"/><text x="128" y="195" class="cell" text-anchor="middle">3</text>
+    <rect x="152" y="164" width="40" height="52" fill="#e7efff" stroke="#829dcb"/><text x="172" y="195" class="cell" text-anchor="middle">4</text>
+    <rect x="196" y="164" width="40" height="52" fill="#e7efff" stroke="#829dcb"/><text x="216" y="195" class="cell" text-anchor="middle">5</text>
+    <rect x="240" y="164" width="40" height="52" fill="#e7efff" stroke="#829dcb"/><text x="260" y="195" class="cell" text-anchor="middle">6</text>
+    <rect x="284" y="164" width="40" height="52" fill="#e7efff" stroke="#829dcb"/><text x="304" y="195" class="cell" text-anchor="middle">7</text>
+    <rect x="328" y="164" width="40" height="52" fill="#e7efff" stroke="#829dcb"/><text x="348" y="195" class="cell" text-anchor="middle">8</text>
+    <rect x="372" y="164" width="40" height="52" fill="#e7efff" stroke="#829dcb"/><text x="392" y="195" class="cell" text-anchor="middle">9</text>
+    <rect x="416" y="164" width="40" height="52" fill="#ffffff" stroke="#c3cede"/><text x="436" y="195" class="tiny" text-anchor="middle">空</text>
+    <rect x="460" y="164" width="40" height="52" fill="#ffffff" stroke="#c3cede"/><text x="480" y="195" class="tiny" text-anchor="middle">空</text>
+  </g>
+  <path d="M 84 148 L 84 160" class="green" marker-end="url(#sg)"/>
+  <text x="60" y="142" class="mk" fill="#2f7d5c">steal = local_head = 2</text>
+  <path d="M 436 244 L 436 232" class="flow" marker-end="url(#sf)"/>
+  <text x="392" y="262" class="mk" fill="#4263a2">tail = 10</text>
+  <text x="64" y="262" class="tiny">队列大小 = tail − local_head = 8，一半即 4 个任务可搬。</text>
+
+  <rect x="680" y="76" width="516" height="200" class="box" fill="#ffffff" stroke="#c3cede"/>
+  <text x="700" y="106" class="head">窃取者自己的 LocalQueue</text>
+  <text x="700" y="128" class="tiny">此时为空，写入端由窃取者独占（单生产者不变）。</text>
+  <g>
+    <rect x="700" y="164" width="40" height="52" fill="#ffffff" stroke="#c3cede"/><text x="720" y="195" class="tiny" text-anchor="middle">空</text>
+    <rect x="744" y="164" width="40" height="52" fill="#ffffff" stroke="#c3cede"/><text x="764" y="195" class="tiny" text-anchor="middle">空</text>
+    <rect x="788" y="164" width="40" height="52" fill="#ffffff" stroke="#c3cede"/><text x="808" y="195" class="tiny" text-anchor="middle">空</text>
+    <rect x="832" y="164" width="40" height="52" fill="#ffffff" stroke="#c3cede"/><text x="852" y="195" class="tiny" text-anchor="middle">空</text>
+    <rect x="876" y="164" width="40" height="52" fill="#ffffff" stroke="#c3cede"/><text x="896" y="195" class="tiny" text-anchor="middle">空</text>
+    <rect x="920" y="164" width="40" height="52" fill="#ffffff" stroke="#c3cede"/><text x="940" y="195" class="tiny" text-anchor="middle">空</text>
+    <rect x="964" y="164" width="40" height="52" fill="#ffffff" stroke="#c3cede"/><text x="984" y="195" class="tiny" text-anchor="middle">空</text>
+    <rect x="1008" y="164" width="40" height="52" fill="#ffffff" stroke="#c3cede"/><text x="1028" y="195" class="tiny" text-anchor="middle">空</text>
+  </g>
+  <path d="M 720 148 L 720 160" class="green" marker-end="url(#sg)"/>
+  <text x="700" y="142" class="mk" fill="#2f7d5c">dst_tail = 0</text>
+  <text x="700" y="240" class="tiny">容量检查：dst_tail − dst_steal = 0 ≤ CAPACITY / 2，可以接收。</text>
+  <text x="700" y="262" class="tiny">窃取者按 _mask 找到目标槽位，直接写入 dst_tail + i。</text>
+
+  <text x="448" y="312" class="small">两端相对：victim 的 worker 从 <tspan class="code">tail</tspan> 端弹出最新任务，窃取者从 <tspan class="code">steal</tspan> 端搬走最旧的一半，两者不争抢同一个槽位。</text>
+  <text x="448" y="334" class="tiny">重叠只发生在指针推进上，而指针由一次 CAS 独占更新，因此不需要额外的锁。</text>
+
+  <!-- ============ 中部：三阶段 ============ -->
+  <!-- 阶段一 -->
+  <rect x="44" y="360" width="372" height="290" class="box" fill="#ffffff" stroke="#c3cede"/>
+  <text x="64" y="390" class="head">① 预留</text>
+  <text x="64" y="412" class="tiny">victim 的 _head 由 pack(2, 2) 改为</text>
+  <text x="64" y="430" class="tiny">pack(2, 6)：低 32 位先行推进，高 32 位不动。</text>
+  <g>
+    <rect x="64" y="452" width="34" height="46" fill="#fdf5ea" stroke="#d4a260"/><text x="81" y="479" class="cell" text-anchor="middle">2</text>
+    <rect x="102" y="452" width="34" height="46" fill="#fdf5ea" stroke="#d4a260"/><text x="119" y="479" class="cell" text-anchor="middle">3</text>
+    <rect x="140" y="452" width="34" height="46" fill="#fdf5ea" stroke="#d4a260"/><text x="157" y="479" class="cell" text-anchor="middle">4</text>
+    <rect x="178" y="452" width="34" height="46" fill="#fdf5ea" stroke="#d4a260"/><text x="195" y="479" class="cell" text-anchor="middle">5</text>
+    <rect x="216" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="233" y="479" class="cell" text-anchor="middle">6</text>
+    <rect x="254" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="271" y="479" class="cell" text-anchor="middle">7</text>
+    <rect x="292" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="309" y="479" class="cell" text-anchor="middle">8</text>
+    <rect x="330" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="347" y="479" class="cell" text-anchor="middle">9</text>
+  </g>
+  <path d="M 81 512 L 81 524" class="orange" marker-end="url(#so)"/>
+  <text x="64" y="540" class="mk" fill="#b15f29">steal = 2</text>
+  <path d="M 233 512 L 233 524" class="flow" marker-end="url(#sf)"/>
+  <text x="212" y="540" class="mk" fill="#4263a2">local_head = 6</text>
+  <text x="64" y="572" class="tiny">槽位 [2, 6) 转为预留态：</text>
+  <text x="64" y="590" class="tiny">try_pop 不会推进 steal；生产者仍按 tail − steal</text>
+  <text x="64" y="608" class="tiny">计容量；另一个窃取者见两半不等而放弃。</text>
+  <text x="64" y="634" class="tiny">CAS 用 acq_rel，失败则回到开头重新读取。</text>
+
+  <!-- 阶段二 -->
+  <rect x="440" y="360" width="372" height="290" class="box" fill="#ffffff" stroke="#c3cede"/>
+  <text x="460" y="390" class="head">② 搬运</text>
+  <text x="460" y="412" class="tiny">_head 保持 pack(2, 6) 不变，复制 4 个任务到</text>
+  <text x="460" y="430" class="tiny">窃取者队列的槽位 [0, 4)，序号由 steal 端起算。</text>
+  <g>
+    <rect x="460" y="452" width="34" height="46" fill="#fdf5ea" stroke="#d4a260"/><text x="477" y="479" class="cell" text-anchor="middle">2</text>
+    <rect x="498" y="452" width="34" height="46" fill="#fdf5ea" stroke="#d4a260"/><text x="515" y="479" class="cell" text-anchor="middle">3</text>
+    <rect x="536" y="452" width="34" height="46" fill="#fdf5ea" stroke="#d4a260"/><text x="553" y="479" class="cell" text-anchor="middle">4</text>
+    <rect x="574" y="452" width="34" height="46" fill="#fdf5ea" stroke="#d4a260"/><text x="591" y="479" class="cell" text-anchor="middle">5</text>
+    <rect x="612" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="629" y="479" class="cell" text-anchor="middle">6</text>
+    <rect x="650" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="667" y="479" class="cell" text-anchor="middle">7</text>
+    <rect x="688" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="705" y="479" class="cell" text-anchor="middle">8</text>
+    <rect x="726" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="743" y="479" class="cell" text-anchor="middle">9</text>
+  </g>
+  <path d="M 477 512 L 477 524" class="orange" marker-end="url(#so)"/>
+  <text x="460" y="540" class="mk" fill="#b15f29">steal = 2</text>
+  <path d="M 629 512 L 629 524" class="flow" marker-end="url(#sf)"/>
+  <text x="608" y="540" class="mk" fill="#4263a2">local_head = 6</text>
+  <path d="M 477 448 L 477 400 L 752 400 L 752 448" class="flow" stroke-dasharray="6 5"/>
+  <text x="560" y="392" class="mk" fill="#4263a2">dst 槽位 [0, 4) 写入 4 个任务</text>
+  <text x="460" y="572" class="tiny">搬运只读取 victim 的槽位、只写入窃取者</text>
+  <text x="460" y="590" class="tiny">自己的槽位。预留已经把其他访问者挡在外面，</text>
+  <text x="460" y="608" class="tiny">因此这一段不需要任何同步。</text>
+
+  <!-- 阶段三 -->
+  <rect x="836" y="360" width="372" height="290" class="box" fill="#ffffff" stroke="#c3cede"/>
+  <text x="856" y="390" class="head">③ 归还</text>
+  <text x="856" y="412" class="tiny">CAS 把 _head 改为 pack(6, 6)：高 32 位追上</text>
+  <text x="856" y="430" class="tiny">低 32 位，两半重新相等，不变量恢复。</text>
+  <g>
+    <rect x="856" y="452" width="34" height="46" fill="#ffffff" stroke="#c3cede"/><text x="873" y="479" class="tiny" text-anchor="middle">空</text>
+    <rect x="894" y="452" width="34" height="46" fill="#ffffff" stroke="#c3cede"/><text x="911" y="479" class="tiny" text-anchor="middle">空</text>
+    <rect x="932" y="452" width="34" height="46" fill="#ffffff" stroke="#c3cede"/><text x="949" y="479" class="tiny" text-anchor="middle">空</text>
+    <rect x="970" y="452" width="34" height="46" fill="#ffffff" stroke="#c3cede"/><text x="987" y="479" class="tiny" text-anchor="middle">空</text>
+    <rect x="1008" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="1025" y="479" class="cell" text-anchor="middle">6</text>
+    <rect x="1046" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="1063" y="479" class="cell" text-anchor="middle">7</text>
+    <rect x="1084" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="1101" y="479" class="cell" text-anchor="middle">8</text>
+    <rect x="1122" y="452" width="34" height="46" fill="#e7efff" stroke="#829dcb"/><text x="1139" y="479" class="cell" text-anchor="middle">9</text>
+  </g>
+  <path d="M 1025 512 L 1025 524" class="green" marker-end="url(#sg)"/>
+  <text x="1008" y="540" class="mk" fill="#2f7d5c">steal = local_head = 6</text>
+  <text x="856" y="572" class="tiny">槽位 [2, 6) 重新可写，生产者可以覆盖。</text>
+  <text x="856" y="590" class="tiny">这里用 CAS 而非 store：期间本地弹出者可能</text>
+  <text x="856" y="608" class="tiny">已把 local_head 推得更远，store 会回退这段进度。</text>
+  <text x="856" y="634" class="tiny">成功后返回 steal_num 给外层。</text>
+
+  <!-- ============ 底部：收尾 ============ -->
+  <rect x="44" y="674" width="1164" height="126" class="box" fill="#ffffff" stroke="#b9c6dd"/>
+  <text x="64" y="704" class="head">外层收尾：留一个任务立即执行</text>
+  <g>
+    <rect x="64" y="720" width="40" height="52" fill="#e4f4ed" stroke="#67a786"/><text x="84" y="751" class="cell" text-anchor="middle">2</text>
+    <rect x="108" y="720" width="40" height="52" fill="#e4f4ed" stroke="#67a786"/><text x="128" y="751" class="cell" text-anchor="middle">3</text>
+    <rect x="152" y="720" width="40" height="52" fill="#e4f4ed" stroke="#67a786"/><text x="172" y="751" class="cell" text-anchor="middle">4</text>
+    <rect x="196" y="720" width="40" height="52" fill="#fae9f4" stroke="#bd8cae"/><text x="216" y="751" class="cell" text-anchor="middle">5</text>
+  </g>
+  <path d="M 236 746 L 292 746" class="flow" marker-end="url(#sf)"/>
+  <path d="M 236 762 L 292 762" class="green" marker-end="url(#sg)"/>
+  <text x="304" y="740" class="small">第 4 个任务（序号 5）被取出，直接返回给 <tspan class="code">run_one</tspan> 立即执行；</text>
+  <text x="304" y="764" class="small">其余 3 个留在窃取者自己的队列里，<tspan class="code">_tail</tspan> 被设为 3，取走的槽位不进入发布范围。</text>
+  <text x="304" y="790" class="tiny">若 steal_num 减 1 之后仍大于 0 才发布尾指针；为 0 时说明只搬来一个任务，不写 _tail。</text>
+  <text x="64" y="790" class="tiny">窃取者队列</text>
+</svg>

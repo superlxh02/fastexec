@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 760" role="img" aria-labelledby="t5 d5">
+  <title id="t5">任务组的计数与上下文传播</title>
+  <desc id="d5">左侧是 block_on 建立的一棵子任务树，每个节点标注其入组时的 running_count；右侧列出三处读写线程局部组指针的位置；底部是计数归零时发出的两条通知，一条指向阻塞在 TaskGroup::wait 的外部线程，一条指向协作等待中的 worker。</desc>
+  <defs>
+    <marker id="tf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4263a2"/>
+    </marker>
+    <marker id="td" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b15f29"/>
+    </marker>
+    <marker id="tg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2f7d5c"/>
+    </marker>
+    <style>
+      text { font-family: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #17233b; }
+      .title { font-size: 26px; font-weight: 700; }
+      .head { font-size: 17px; font-weight: 700; }
+      .small { font-size: 14px; }
+      .tiny { font-size: 12px; fill: #4b5c78; }
+      .cell { font-size: 13px; }
+      .code { font-family: "DejaVu Sans Mono", monospace; font-size: 12.5px; }
+      .box { stroke-width: 2; rx: 12; }
+      .node { stroke-width: 2; rx: 8; }
+      .flow { fill: none; stroke: #4263a2; stroke-width: 2.2; }
+      .dash { fill: none; stroke: #b15f29; stroke-width: 2.2; stroke-dasharray: 7 6; }
+      .track { fill: none; stroke: #2f7d5c; stroke-width: 2.2; }
+    </style>
+  </defs>
+
+  <rect width="1240" height="760" fill="#f8faff"/>
+  <text x="44" y="46" class="title">任务组的计数与上下文传播</text>
+
+  <!-- ============ 左：任务树 ============ -->
+  <rect x="44" y="76" width="520" height="354" class="box" fill="#ffffff" stroke="#c3cede"/>
+  <text x="68" y="110" class="head">block_on 建立的子任务树</text>
+  <text x="68" y="132" class="tiny">每个节点在提交时使组内计数加一，执行完并清理后再减一。</text>
+
+  <rect x="84" y="146" width="220" height="52" class="node" fill="#e4f4ed" stroke="#67a786"/>
+  <text x="100" y="168" class="small">根任务 R（block_on 提交）</text>
+  <text x="100" y="188" class="code">running_count: 0 → 1</text>
+
+  <rect x="68" y="250" width="200" height="52" class="node" fill="#f2f0ff" stroke="#8e8ac9"/>
+  <text x="84" y="272" class="small">子任务 C1</text>
+  <text x="84" y="292" class="code">count: 1 → 2</text>
+
+  <rect x="300" y="250" width="200" height="52" class="node" fill="#f2f0ff" stroke="#8e8ac9"/>
+  <text x="316" y="272" class="small">子任务 C2</text>
+  <text x="316" y="292" class="code">count: 2 → 3</text>
+
+  <rect x="68" y="354" width="200" height="52" class="node" fill="#fae9f4" stroke="#bd8cae"/>
+  <text x="84" y="376" class="small">孙任务 G1</text>
+  <text x="84" y="396" class="code">count: 3 → 4</text>
+
+  <path d="M 194 198 L 168 246" class="flow" marker-end="url(#tf)"/>
+  <text x="118" y="228" class="tiny" fill="#4263a2">spawn</text>
+  <path d="M 194 198 L 400 246" class="flow" marker-end="url(#tf)"/>
+  <text x="330" y="228" class="tiny" fill="#4263a2">spawn</text>
+  <path d="M 168 302 L 168 350" class="dash" marker-end="url(#td)"/>
+  <text x="178" y="332" class="tiny" fill="#b15f29">任务体内 spawn</text>
+
+  <text x="68" y="424" class="tiny">树形结构不是任务组显式维护的：它由 TLS 继承自动形成，</text>
+
+  <!-- ============ 右：TLS 传播 ============ -->
+  <rect x="584" y="76" width="612" height="354" class="box" fill="#ffffff" stroke="#c3cede"/>
+  <text x="608" y="110" class="head">线程局部组指针的三处读写</text>
+
+  <rect x="608" y="128" width="12" height="12" fill="#4263a2"/>
+  <text x="632" y="140" class="code">block_on · GroupScope</text>
+  <text x="632" y="160" class="tiny">提交根任务前把新组写入 TLS，提交后恢复旧值；根任务因此入组。</text>
+
+  <rect x="608" y="192" width="12" height="12" fill="#b15f29"/>
+  <text x="632" y="204" class="code">任务体 · ContextGuard</text>
+  <text x="632" y="224" class="tiny">用户函数执行期间把所属组写入 TLS，离开时恢复旧值。</text>
+  <text x="632" y="244" class="tiny">恢复这一步是嵌套 block_on 正确的前提：内层结束后外层重新成为当前值。</text>
+
+  <rect x="608" y="276" width="12" height="12" fill="#2f7d5c"/>
+  <text x="632" y="288" class="code">submit_with_options</text>
+  <text x="632" y="308" class="tiny">读 TLS 并用 shared_from_this() 取得所有权，交给 job 持有。</text>
+  <text x="632" y="328" class="tiny">于是任务即使被排入队列、更晚才执行，组也不会提前销毁。</text>
+
+  <path d="M 608 358 L 1180 358" stroke="#c3cede" stroke-width="1.5"/>
+  <text x="608" y="384" class="tiny">TLS 中保存的是裸指针；所有权在 job 捕获的 shared_ptr 上。只要还有</text>
+  <text x="608" y="404" class="tiny">一个工作项在队列里或正在执行，组就存活。</text>
+
+  <!-- ============ 底：归零通知 ============ -->
+  <rect x="44" y="450" width="1152" height="272" class="box" fill="#ffffff" stroke="#b9c6dd"/>
+  <text x="68" y="484" class="head">计数归零时的两条通知</text>
+  <text x="68" y="506" class="tiny">decrement 的 fetch_sub 返回 1 时计数变为 0，此时发出两条互不重叠的通知。</text>
+
+  <rect x="68" y="528" width="540" height="112" class="node" fill="#f2f0ff" stroke="#8e8ac9"/>
+  <text x="88" y="558" class="code">running_count.notify_one()</text>
+  <text x="88" y="582" class="small">唤醒阻塞在 <tspan class="code">TaskGroup::wait()</tspan> 上的外部线程</text>
+  <text x="88" y="606" class="tiny">它们等的是 running_count 自身的等待队列，</text>
+  <text x="88" y="626" class="tiny">也就是 block_on 在外部线程上走的那条路径。</text>
+
+  <rect x="636" y="528" width="540" height="112" class="node" fill="#e4f4ed" stroke="#67a786"/>
+  <text x="656" y="558" class="code">_on_zero() → signal_work(true)</text>
+  <text x="656" y="582" class="small">唤醒处于 <tspan class="code">help_until</tspan> 中的 worker</text>
+  <text x="656" y="606" class="tiny">它们等的是 Shared::_work_epoch，与 running_count 无关，</text>
+  <text x="656" y="626" class="tiny">因此必须由回调转发这一事件；外部等待时该回调为空。</text>
+
+  <path d="M 194 648 L 194 668" class="track" marker-end="url(#tg)"/>
+  <text x="68" y="688" class="tiny">两条通知缺一不可：只保留前者，worker 的协作等待循环会错过“组已归零”这个事件；只保留后者，外部线程的 wait 就失去了自己的唤醒源，</text>
+  <text x="68" y="708" class="tiny">因为 atomic::wait 只由同地址的 notify 唤醒。</text>
+</svg>

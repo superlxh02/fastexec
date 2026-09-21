@@ -11,9 +11,15 @@
 #include <span>
 #include <vector>
 
-#include "fastlog/fastlog.hpp"
 #include "util.hpp"
 namespace fastexec::detail {
+// 任务的可窃取性在提交时确定。false 表示只能由接收它的 worker 执行；
+// 从外部线程提交时由全局队列选择接收者，之后不会进入可窃取本地队列。
+struct Task {
+  std::function<void()> run;
+  bool stealable{true};
+  void operator()() { run(); }
+};
 // 非阻塞全局队列：基于互斥锁，但是不基于条件变量
 class GlobalQueue : util::noncopyable {
  public:
@@ -29,7 +35,10 @@ class GlobalQueue : util::noncopyable {
     return _closed;
   }
 
-  void close() { _closed.store(true); }
+  void close() {
+    auto lock = get_lock();
+    _closed.store(true, std::memory_order_release);
+  }
 
   [[nodiscard]]
   std::size_t size() const {
@@ -43,19 +52,20 @@ class GlobalQueue : util::noncopyable {
     return _queue.empty();
   }
 
-  void push_back(std::function<void()> task) {
-    if (closed()) throw std::runtime_error{"queue is closed"};
+  void push_back(Task task, bool internal = false) {
     auto lock = get_lock();
+    // 关闭与外部提交在同一把锁下排序；正在运行的任务仍可提交子任务。
+    if (!internal && closed()) throw std::runtime_error{"queue is closed"};
     _queue.push_back(std::move(task));
   }
 
-  void push_back_batch(std::span<std::function<void()>> tasks) {
-    if (closed()) throw std::runtime_error{"queue is closed"};
+  void push_back_batch(std::span<Task> tasks, bool internal = false) {
     auto lock = get_lock();
+    if (!internal && closed()) throw std::runtime_error{"queue is closed"};
     _queue.insert(_queue.end(), tasks.begin(), tasks.end());
   }
 
-  auto try_pop() -> std::optional<std::function<void()>> {
+  auto try_pop() -> std::optional<Task> {
     auto lock = get_lock();
     if (_queue.empty()) return std::nullopt;
     auto task = std::move(_queue.front());
@@ -64,12 +74,12 @@ class GlobalQueue : util::noncopyable {
   }
   // 尝试批量弹出任务
   auto try_pop_batch(std::size_t size)
-      -> std::optional<std::vector<std::function<void()>>> {
+      -> std::optional<std::vector<Task>> {
     auto lock = get_lock();
     if (_queue.empty()) return std::nullopt;
     std::size_t n = std::min(_queue.size(), size);
     if (n == 0) return std::nullopt;
-    std::vector<std::function<void()>> tasks;
+    std::vector<Task> tasks;
     tasks.reserve(n);
     for (std::size_t i = 0; i < n; ++i) {
       tasks.push_back(std::move(_queue.front()));
@@ -86,7 +96,7 @@ class GlobalQueue : util::noncopyable {
 
  private:
   mutable std::mutex _mutex{};                 // 互斥锁，用于保护队列
-  std::deque<std::function<void()>> _queue{};  // 任务队列
+  std::deque<Task> _queue{};  // 任务队列
   std::atomic<bool> _closed{false};            // 队列是否关闭
 };
 
@@ -163,7 +173,8 @@ class LocalQueue {
       } else if (steal != local_head) {
         // 队列已满,且头指针与实际头指针不同,说明有其他线程在窃取任务
         // 尝试将任务推送到全局队列
-        global_queue.push_back(std::move(task));
+        global_queue.push_back(Task{std::move(task), true}, true);
+        return;
       } else {
         // 正常调用处理溢出
         if (handle_overflow(task, local_head, tail, global_queue)) {
@@ -258,22 +269,21 @@ class LocalQueue {
     // 4.更新头指针
     if (!_head.compare_exchange_weak(cur_head, next_head,
                                      std::memory_order::relaxed)) {
-      fastlog::console.error("handle_overflow: failed to update head pointer");
       return false;
     }
 
     // step2 : 转移任务到一个临时vector
     // 1.将take_len数量的任务从本地队列转移到一个临时定义的vector内
-    std::vector<std::function<void()>> tasks;
+    std::vector<Task> tasks;
     for (int i = 0; i < take_len; i++) {
       std::size_t idx = static_cast<std::size_t>(local_head + i) & _mask;
-      tasks.push_back(std::move(_tasks[idx]));
+      tasks.push_back(Task{std::move(_tasks[idx]), true});
     }
     // 2.将触发溢出的任务添加到vector内
-    tasks.push_back(task);
+    tasks.push_back(Task{std::move(task), true});
 
     // step3 : 将vector内的任务批量推送到全局队列
-    global_queue.push_back_batch(tasks);
+    global_queue.push_back_batch(tasks, true);
     return true;
   }
 

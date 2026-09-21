@@ -1,185 +1,167 @@
-#ifndef __FASTSTDEXEC_DETAIL_WORKER_HPP
-#define __FASTSTDEXEC_DETAIL_WORKER_HPP
+#ifndef FASTEXEC_DETAIL_WORKER_HPP
+#define FASTEXEC_DETAIL_WORKER_HPP
 
-#include <chrono>
+#include <algorithm>
+#include <cstdint>
+#include <deque>
+#include <optional>
 #include <thread>
 #include <vector>
 
+#include "fastexec/future.hpp"
 #include "queue.hpp"
 #include "shared.hpp"
+#include "taskgroup.hpp"
 namespace fastexec::detail {
 class Worker;
-// 线程局部存储，当前worker指针
-static inline thread_local Worker* t_worker{nullptr};
+inline thread_local Worker *t_worker{nullptr};
+
 class Worker {
   friend class Shared;
 
- public:
-  Worker(Shared* shared, std::size_t worker_id)
-      : _shared(shared), _worker_id(worker_id) {
-    // 将自己注册到共享类中
-    _shared->register_worker(worker_id, this);
+public:
+  Worker(Shared *shared, std::size_t worker_id)
+      : _shared(shared), _worker_id(worker_id),
+        _random_state(0x9e3779b97f4a7c15ULL ^
+                      (worker_id + 1) * 0xbf58476d1ce4e5b9ULL) {
+    _shared->register_worker(static_cast<int>(worker_id), this);
     t_worker = this;
+    fastexec::detail::future_help_context = this;
+    fastexec::detail::future_help = [](void *worker,
+                                       const std::atomic<bool> &ready) {
+      static_cast<Worker *>(worker)->help_until_ready(ready);
+    };
   }
-
   ~Worker() {
     t_worker = nullptr;
-    t_shared = nullptr;
+    fastexec::detail::future_help = nullptr;
+    fastexec::detail::future_help_context = nullptr;
     _shared->_stop_latch.arrive_and_wait();
   }
 
- public:
-  // worker运行函数
+  // 快路径只查自己的队列；空闲时依次查全局队列和随机起点的其他 worker。
+  // 工作版本号在查队列前获取，atomic::wait 只在版本号未改变时睡眠，
+  // 既不反复执行 100us 定时唤醒，也不会漏掉检查期间提交的任务。
   void run() {
-    while (true) {
-      // 循环退出条件是：线程池停止且本地队列和全局队列都为空
-      std::optional<std::function<void()>> task;
-      // 从队列获取任务
-      task = std::move(get_next_task());
-      if (task.has_value()) {
-        (*task)();
+    for (;;) {
+      const auto epoch = _shared->work_epoch();
+      if (run_one())
         continue;
-      }
-      //  从其他worker的队列窃取任务
-      task = std::move(task_steal());
-      if (task.has_value()) {
-        (*task)();
-        continue;
-      }
-      std::this_thread::sleep_for(std::chrono::microseconds(100));
-      // std::this_thread::sleep_for(std::chrono::milliseconds(100));//用于valgrind检查
-      _shutdown = _shared->get_global_queue().closed();
-      if (quit_condition(_shutdown)) {
+      if (_shared->get_global_queue().closed() && _shared->all_done())
         break;
-      }
+      _shared->wait_for_work(epoch);
     }
   }
 
- public:
-  // 检查本地队列是否为空
-  bool is_local_queue_empty() { return _local_queue.empty(); }
+  // worker 在等待自己的子任务时继续执行队列中的工作，避免占满线程池后互等。
+  // 版本号在扫描队列前读取；任务组归零也会发出工作通知，因此不会漏唤醒。
+  void help_until(TaskGroup &group) {
+    while (group.count() != 0) {
+      const auto epoch = _shared->work_epoch();
+      if (run_one())
+        continue;
+      if (group.count() == 0)
+        break;
+      _shared->wait_for_work(epoch);
+    }
+  }
 
-  // 获取本地队列总大小
-  std::size_t get_local_queue_size() { return _local_queue.size(); }
+  void help_until_ready(const std::atomic<bool> &ready) {
+    while (!ready.load(std::memory_order_acquire)) {
+      const auto epoch = _shared->work_epoch();
+      if (run_one())
+        continue;
+      if (ready.load(std::memory_order_acquire))
+        break;
+      _shared->wait_for_work(epoch);
+    }
+  }
 
-  // 向本地队列推送任务，处理溢出
-  bool push_back_task_to_local(std::function<void()> task,
-                               GlobalQueue& global_queue) {
-    _local_queue.push_back(std::move(task), global_queue);
+  bool run_one() {
+    auto task = get_next_task();
+    if (!task)
+      task = task_steal();
+    if (!task)
+      return false;
+    (*task)();
     return true;
   }
 
-  // 向本地队列推送批量任务，是否溢出通过返回值判断
-  bool push_back_batch_task_to_local(std::vector<std::function<void()>> tasks) {
-    _local_queue.push_back_batch(tasks);
-    return true;
+  // 单生产者约束：只能由所属 worker 调用。不可窃取任务进入私有队列。
+  void push_back_task_to_local(Task task, GlobalQueue &global_queue) {
+    if (task.stealable)
+      _local_queue.push_back(std::move(task.run), global_queue);
+    else
+      _private_queue.push_back(std::move(task));
+    _shared->signal_work();
   }
-  // 检查worker是否有任务
-  bool is_worker_has_task() { return !_local_queue.empty(); }
-
-  // 获取worker id
   std::size_t get_worker_id() const { return _worker_id; }
 
- private:
-  // 从本地队列获取任务，先从高优先级队列获取，再从普通优先级队列获取
-  std::optional<std::function<void()>> get_next_local_task() {
-    if (!_local_queue.empty()) {
-      return _local_queue.try_pop();
-    } else {
-      return std::nullopt;
-    }
-  }
-
-  // worker获取下一个任务，策略是本地队列优先,本地没有任务时从全局队列拿,返回空
-  std::optional<std::function<void()>> get_next_task() {
-    std::optional<std::function<void()>> result{std::nullopt};
-
-    // 先从本地取
-    result = std::move(get_next_local_task());
-    if (result.has_value()) {
-      return result;
-    }
-    // 如果全局队列为空，返回空
-    if (_shared->is_global_queue_empty()) {
-      return std::nullopt;
-    }
-
-    // 获取到本地队列剩余大小的一半和容量一半的较小的那个
-    auto num =
-        std::min(_local_queue.remain_size(), _local_queue.capacity() / 2);
-    if (num == 0) {
-      return std::nullopt;
-    }
-    // 从全局队列获取num个任务
-    auto tasks = _shared->get_batch_global_tasks(num);
-    if (tasks.has_value() && !tasks.value().empty()) {
-      auto& task_vec = tasks.value();
-      // 从全局队列获取的任务中拿到最后一个任务
-      auto task = std::move(task_vec.back());
-      // 从全局队列获取的任务中移除最后一个任务
-      task_vec.pop_back();
-      // 如果全局队列中还有任务，把它们放到本地队列中
-      if (!task_vec.empty()) {
-        _local_queue.push_back_batch(task_vec);
-      }
+private:
+  std::optional<Task> get_next_task() {
+    if (!_private_queue.empty()) {
+      auto task = std::move(_private_queue.front());
+      _private_queue.pop_front();
       return task;
-    } else {
-      return std::nullopt;
     }
+    if (auto local = _local_queue.try_pop())
+      return Task{std::move(*local), true};
+
+    // 批量从全局队列搬运，摊薄全局锁的成本。不可窃取任务在这里绑定到当前
+    // worker。
+    const auto batch = _local_queue.capacity() / 2;
+    auto tasks = _shared->get_batch_global_tasks(batch);
+    if (!tasks)
+      return std::nullopt;
+    auto current = std::move(tasks->back());
+    tasks->pop_back();
+    for (auto &task : *tasks) {
+      if (task.stealable)
+        _local_queue.push_back(std::move(task.run),
+                               _shared->get_global_queue());
+      else
+        _private_queue.push_back(std::move(task));
+    }
+    // 一批可窃取任务刚进入本地队列，唤醒休眠中的窃取者。
+    if (!tasks->empty())
+      _shared->signal_work(true);
+    return current;
   }
 
-  // 任务窃取逻辑，取本地队列中剩余任务最多的worker
-  std::optional<std::function<void()>> task_steal() {
-    // 先判断能不能窃取
-    if (!_shared->can_steal_task()) {
-      return std::nullopt;
-    }
-    // 增加窃取worker计数
-    _shared->increment_steal_worker_count();
-    // 设置正在窃取任务标志
-    _is_stealing.store(true, std::memory_order::release);
+  std::uint64_t next_random() {
+    // 每个 worker 独立的 xorshift64 状态，热路径无全局随机数锁。
+    auto x = _random_state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    return _random_state = x;
+  }
+
+  std::optional<Task> task_steal() {
     auto workers = _shared->get_workers();
-    std::size_t num = 0, idx = 0;
-    for (auto& worker : workers) {
-      // 不窃取自己的任务
-      if (worker == t_worker) continue;
-      if (worker->get_local_queue_size() > num &&
-          !worker->_is_stealing.load(std::memory_order::acquire)) {
-        num = worker->get_local_queue_size();
-        idx = worker->get_worker_id();
+    if (workers.size() < 2 || !_shared->can_steal_task())
+      return std::nullopt;
+    _shared->increment_steal_worker_count();
+    // 随机起点、顺序轮询：平均分散热点，且一次失败后仍能检查所有目标。
+    const auto start = next_random() % workers.size();
+    for (std::size_t step = 0; step < workers.size(); ++step) {
+      auto *victim = workers[(start + step) % workers.size()];
+      if (victim == this)
+        continue;
+      if (auto stolen = victim->_local_queue.be_stolen_by(_local_queue)) {
+        _shared->decrement_steal_worker_count();
+        return Task{std::move(*stolen), true};
       }
     }
-    // 如果找到窃取目标，窃取任务
-    if (num > 0) {
-      auto res =
-          workers[idx]->_local_queue.be_stolen_by(t_worker->_local_queue);
-      _shared->decrement_steal_worker_count();
-      _is_stealing.store(false, std::memory_order::release);
-      return res;
-    } else {
-      // 如果没有找到窃取目标，从全局队列中获取任务
-      _shared->decrement_steal_worker_count();
-      _is_stealing.store(false, std::memory_order::release);
-      return _shared->get_next_global_task();
-    }
+    _shared->decrement_steal_worker_count();
+    return std::nullopt;
   }
 
-  bool quit_condition(bool shutdown) {
-    if (shutdown && _local_queue.empty() &&
-        _shared->get_global_queue().empty()) {
-      return true;
-    } else {
-      return false;
-    }
-  }
-
- private:
-  std::size_t _worker_id{};               // worker id
-  LocalQueue<> _local_queue{};            // 普通优先级队列
-  Shared* _shared{};                      // 共享类指针
-  std::atomic<bool> _is_stealing{false};  // 是否正在窃取任务
-  bool _shutdown{false};                  // 是否关闭
+  std::size_t _worker_id;
+  LocalQueue<> _local_queue;
+  std::deque<Task> _private_queue;
+  Shared *_shared;
+  std::uint64_t _random_state;
 };
-}  // namespace fastexec::detail
-
+} // namespace fastexec::detail
 #endif

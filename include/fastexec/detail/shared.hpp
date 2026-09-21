@@ -10,31 +10,26 @@ namespace fastexec::detail {
 class Worker;
 class Shared;
 
-// 线程局部存储，当前共享类指针
-static inline thread_local Shared* t_shared{nullptr};
-
 class Shared : util::noncopyable {
   friend class Worker;
 
- public:
+public:
   explicit Shared(std::size_t worker_count) : _stop_latch(worker_count) {
-    assert(t_shared == nullptr);
-    t_shared = this;
     _workers.reserve(worker_count);
     _workers.resize(worker_count);
   }
 
-  ~Shared() { t_shared = nullptr; }
+  ~Shared() = default;
 
- public:
+public:
   // 注册 worker
-  void register_worker(int worker_id, Worker* worker) {
+  void register_worker(int worker_id, Worker *worker) {
     _workers[worker_id] = worker;
   }
 
   // 获取所有注册的 worker
   [[nodiscard]]
-  std::span<Worker*> get_workers() {
+  std::span<Worker *> get_workers() {
     return _workers;
   }
 
@@ -45,16 +40,17 @@ class Shared : util::noncopyable {
   }
 
   // 全局队列关闭
-  void global_queue_close() { _global_queue.close(); }
-
-  // 获取全局任务队列中的下一个任务
-  std::optional<std::function<void()>> get_next_global_task() {
-    return _global_queue.try_pop();
+  void global_queue_close() {
+    _global_queue.close();
+    signal_work(true);
   }
 
+  // 获取全局任务队列中的下一个任务
+  std::optional<Task> get_next_global_task() { return _global_queue.try_pop(); }
+
   // 获取全局任务队列中的多个任务
-  std::optional<std::vector<std::function<void()>>> get_batch_global_tasks(
-      std::size_t batch_size) {
+  std::optional<std::vector<Task>>
+  get_batch_global_tasks(std::size_t batch_size) {
     return _global_queue.try_pop_batch(batch_size);
   }
 
@@ -62,16 +58,40 @@ class Shared : util::noncopyable {
   bool is_global_queue_empty() { return _global_queue.empty(); }
 
   // 将任务添加到全局任务队列的末尾
-  void push_back_task_to_global(std::function<void()> task) {
+  void push_back_task_to_global(Task task) {
     _global_queue.push_back(std::move(task));
+    signal_work();
   }
   // 将多个任务添加到全局任务队列的末尾
-  void push_back_batch_task_to_global(
-      std::vector<std::function<void()>> tasks) {
+  void push_back_batch_task_to_global(std::vector<Task> tasks) {
     _global_queue.push_back_batch(tasks);
+    signal_work(true);
+  }
+  // 每次出现新任务或关闭时递增版本号，避免 worker
+  // 在检查队列与休眠之间丢失唤醒。
+  void signal_work(bool all = false) noexcept {
+    _work_epoch.fetch_add(1, std::memory_order_release);
+    if (all)
+      _work_epoch.notify_all();
+    else
+      _work_epoch.notify_one();
+  }
+  void task_finished() {
+    if (_pending.fetch_sub(1, std::memory_order_acq_rel) == 1)
+      signal_work(true);
+  }
+  void task_added() { _pending.fetch_add(1, std::memory_order_relaxed); }
+  bool all_done() const {
+    return _pending.load(std::memory_order_acquire) == 0;
+  }
+  std::uint64_t work_epoch() const {
+    return _work_epoch.load(std::memory_order_acquire);
+  }
+  void wait_for_work(std::uint64_t epoch) {
+    _work_epoch.wait(epoch, std::memory_order_acquire);
   }
   // 获取全局任务队列
-  GlobalQueue& get_global_queue() { return _global_queue; }
+  GlobalQueue &get_global_queue() { return _global_queue; }
 
   // 增加窃取任务的 worker 数量
   void increment_steal_worker_count() {
@@ -88,12 +108,15 @@ class Shared : util::noncopyable {
            (_workers.size() / 2);
   }
 
- private:
-  std::vector<Worker*> _workers{};                  // 所有注册的 worker
-  GlobalQueue _global_queue{};                      // 全局任务队列
-  std::atomic<std::size_t> _steal_worker_count{0};  // 窃取任务的 worker 数量
-  std::latch _stop_latch;  // 等待所有 Worker 线程完成任务
+private:
+  std::vector<Worker *> _workers{};                // 所有注册的 worker
+  GlobalQueue _global_queue{};                     // 全局任务队列
+  std::atomic<std::size_t> _steal_worker_count{0}; // 窃取任务的 worker 数量
+  std::atomic<std::size_t> _pending{
+      0}; // 排队与执行中的任务总数，关闭后用于安全退出
+  std::atomic<std::uint64_t> _work_epoch{0}; // 工作版本号，用于原子等待
+  std::latch _stop_latch; // 等待所有 Worker 线程完成任务
 };
-}  // namespace fastexec::detail
+} // namespace fastexec::detail
 
 #endif

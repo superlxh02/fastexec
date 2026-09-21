@@ -1,0 +1,24 @@
+# 构建产物
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+Makefile
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+
+# 编辑器与 IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# 系统
+.DS_Store
+Thumbs.db

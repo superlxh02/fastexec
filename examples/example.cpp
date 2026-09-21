@@ -1,4 +1,21 @@
 #include "fastexec/exec.hpp"
+#include "fastlog/fastlog.hpp"
+
+
+template <typename T>
+struct std::formatter<std::vector<T>, char> {
+  constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+  auto format(const std::vector<T>& v, std::format_context& ctx) const {
+    auto out = ctx.out();
+    *out++ = '[';
+    for (size_t i = 0; i < v.size(); ++i) {
+      if (i) out = std::format_to(out, ", ");
+      out = std::format_to(out, "{}", v[i]);
+    }
+    *out++ = ']';
+    return out;
+  }
+};
 
 // 基础异步接口
 void base_demo() {

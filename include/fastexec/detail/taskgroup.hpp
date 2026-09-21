@@ -2,8 +2,11 @@
 #define __FASTSTDEXEC_DETAIL_TASK_GROUP_HPP
 
 #include <atomic>
-
-#include "fastlog/fastlog.hpp"
+#include <cstddef>
+#include <exception>
+#include <functional>
+#include <memory>
+#include <mutex>
 namespace fastexec::detail {
 
 /**
@@ -11,9 +14,10 @@ namespace fastexec::detail {
  * 用于追踪一组相关任务的完成情况。
  * 内部维护一个原子计数器，支持增加、减少和等待归零操作。
  */
-struct TaskGroup {
-  TaskGroup() { fastlog::console.trace("TaskGroup created"); }
-  ~TaskGroup() { fastlog::console.trace("TaskGroup destroyed"); }
+struct TaskGroup : std::enable_shared_from_this<TaskGroup> {
+  explicit TaskGroup(std::function<void()> on_zero = {})
+      : _on_zero(std::move(on_zero)) {}
+  ~TaskGroup() = default;
   // 正在运行（或排队）的任务数量
   std::atomic<size_t> running_count{0};
 
@@ -24,8 +28,10 @@ struct TaskGroup {
   void decrement() {
     // fetch_sub 返回修改前的值。如果修改前是 1，说明减完后变成了 0。
     if (running_count.fetch_sub(1, std::memory_order_release) == 1) {
-      // 只有当计数器归零时，才通知所有等待者
-      running_count.notify_all();
+      // block_on 只有一个等待方；worker 内等待还需要唤醒线程池的工作循环。
+      running_count.notify_one();
+      if (_on_zero)
+        _on_zero();
     }
   }
 
@@ -38,8 +44,34 @@ struct TaskGroup {
       count = running_count.load(std::memory_order_acquire);
     }
   }
+
+  [[nodiscard]] size_t count() const {
+    return running_count.load(std::memory_order_acquire);
+  }
+
+  // 多个子任务可能同时失败，只保存第一个异常。锁只在异常路径使用。
+  void record_exception(std::exception_ptr error) {
+    std::lock_guard lock(_error_mutex);
+    if (!_first_error)
+      _first_error = std::move(error);
+  }
+
+  void rethrow_first_error() {
+    std::exception_ptr error;
+    {
+      std::lock_guard lock(_error_mutex);
+      error = _first_error;
+    }
+    if (error)
+      std::rethrow_exception(error);
+  }
+
+private:
+  std::function<void()> _on_zero;
+  std::mutex _error_mutex;
+  std::exception_ptr _first_error;
 };
 
-}  // namespace fastexec::detail
+} // namespace fastexec::detail
 
 #endif
